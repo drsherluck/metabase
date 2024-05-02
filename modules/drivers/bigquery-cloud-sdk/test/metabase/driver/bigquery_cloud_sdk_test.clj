@@ -8,8 +8,11 @@
    [metabase.driver :as driver]
    [metabase.driver.bigquery-cloud-sdk :as bigquery]
    [metabase.driver.bigquery-cloud-sdk.common :as bigquery.common]
+   [metabase.lib.test-metadata :as meta]
+   [metabase.lib.test-util :as lib.tu]
    [metabase.models :refer [Database Field Table]]
    [metabase.query-processor :as qp]
+   [metabase.query-processor.store :as qp.store]
    [metabase.query-processor.compile :as qp.compile]
    [metabase.query-processor.pipeline :as qp.pipeline]
    [metabase.query-processor.test-util :as qp.test-util]
@@ -650,7 +653,7 @@
     (let [fake-execute-called (atom false)
           orig-fn             @#'bigquery/execute-bigquery]
       (testing "Retry functionality works as expected"
-        (with-redefs [bigquery/execute-bigquery (fn [^BigQuery client ^String sql parameters _ _]
+        (with-redefs [bigquery/execute-bigquery (fn [^BigQuery client _ ^String sql parameters _ _]
                                                   (if-not @fake-execute-called
                                                     (do (reset! fake-execute-called true)
                                                         ;; simulate a transient error being thrown
@@ -666,7 +669,7 @@
     (let [fake-execute-called (atom false)
           orig-fn        @#'bigquery/execute-bigquery]
       (testing "Should not retry query on cancellation"
-        (with-redefs [bigquery/execute-bigquery (fn [^BigQuery client ^String sql parameters _ _]
+        (with-redefs [bigquery/execute-bigquery (fn [^BigQuery client _ ^String sql parameters _ _]
                                                   ;; We only want to simulate exception on the query that we're testing and not on possible db setup queries
                                                   (if (and (re-find #"notRetryCancellationExceptionTest" sql) (not @fake-execute-called))
                                                     (do (reset! fake-execute-called true)
@@ -871,3 +874,63 @@
                   qp.compile/compile-and-splice-parameters
                   :query
                   pretty-sql-lines))))))
+
+;; if I run a BigQuery query, does it get labels  added to it?
+(defn- query->labels [query]
+  (let [native-labels (atom nil)
+        done-exception (Exception. "Done.")]
+    (binding [bigquery/*process-native* (fn [_respond _database labels _sql _parameters _cancel-chan]
+                                          (reset! native-labels labels)
+                                          (throw done-exception))]
+      (try
+        (qp/process-query query)
+        (catch Throwable e
+          (when-not (identical? e done-exception)
+            (throw e))))
+      @native-labels)))
+
+(deftest ^:parallel add-bigquery-labels-test
+  (testing "running a BigQuery query with include-info-labels set to true adds labels to the underlying job"
+    (mt/test-driver :bigquery-cloud-sdk
+      (qp.store/with-metadata-provider (let [db (merge meta/database
+                                                       {:id      1
+                                                        :engine  :bigquery-cloud-sdk
+                                                        :details (merge (:details (mt/db))
+                                                                        {:include-info-labels true})})]
+                                         (lib.tu/mock-metadata-provider
+                                          {:database db
+                                           :tables   [(merge (meta/table-metadata :venues)
+                                                             {:name   "venues"
+                                                              :id     1
+                                                              :db-id  1
+                                                              :schema (get-in db [:details :dataset-filters-patterns])})]
+                                           :fields   [(merge (meta/field-metadata :venues :id)
+                                                             {:table-id  1
+                                                              :name      "id"
+                                                              :base-type :type/Integer})
+                                                      (merge (meta/field-metadata :venues :name)
+                                                             {:table-id  1
+                                                              :name      "name"
+                                                              :base_type :type/Text})]}))
+        (is (= {"metabase_user_id" 1000, "metabase_card_id" 1, "metabase_dashboard_id" 10}
+               (query->labels
+                {:database 1
+                 :type     :query
+                 :query    {:source-table 1
+                            :limit        1}
+                 :info     {:executed-by 1000
+                            :card-id 1
+                            :dashboard-id 10}})))))))
+
+(deftest ^:parallel remove-bigquery-labels-test
+  (mt/test-driver :bigquery-cloud-sdk
+    (is (= {}
+           (query->labels
+            {:database (mt/id)
+             :type     :query
+             :query    {:source-table (mt/id :venues)
+                        :limit        1}
+             :info     {:executed-by 1000
+                        :card-id 1
+                        :dashboard-id 10}}))
+        "running a BigQuery query with include-info-labels set to false does not add job labels")))

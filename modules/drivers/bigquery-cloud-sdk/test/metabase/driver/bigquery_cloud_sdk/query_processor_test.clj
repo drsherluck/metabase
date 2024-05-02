@@ -226,7 +226,7 @@
 (defn- query->native [query]
   (let [native-query   (atom nil)
         done-exception (Exception. "Done.")]
-    (binding [bigquery/*process-native* (fn [_respond _database sql _parameters _cancel-chan]
+    (binding [bigquery/*process-native* (fn [_respond _database _labels sql _parameters _cancel-chan]
                                           (reset! native-query sql)
                                           (throw done-exception))]
       (try
