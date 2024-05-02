@@ -69,6 +69,10 @@ export const FIELD_OVERRIDES: Record<string, EngineFieldOverride> = {
     title: t`Include User ID and query hash in queries`,
     description: t`This can be useful for auditing and debugging, but prevents  databases from caching results and may increase your costs.`,
   },
+  "include-info-labels": {
+    title: t`Include User ID, Card ID and Dashboard ID as labels in queries`,
+    description: t`This can be useful for auditing and cost tracking.`,
+  },
   "use-srv": {
     title: t`Connect using DNS SRV`,
     description: t`If you're connecting to an Atlas cluster, you might need to turn this on. Note that your provided host must be a fully qualified domain name.`,

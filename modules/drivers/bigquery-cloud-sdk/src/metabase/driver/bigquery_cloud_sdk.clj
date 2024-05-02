@@ -323,7 +323,7 @@
            e)))
 
 (defn- execute-bigquery
-  ^TableResult [^BigQuery client ^String sql parameters cancel-chan cancel-requested?]
+  ^TableResult [^BigQuery client labels ^String sql parameters cancel-chan cancel-requested?]
   {:pre [client (not (str/blank? sql))]}
   (try
     (let [request (doto (QueryJobConfiguration/newBuilder sql)
@@ -334,7 +334,8 @@
                     ;; effect for RPC (a.k.a. "fast") calls
                     ;; there is no equivalent of .setMaxRows on a JDBC Statement; we rely on our middleware to stop
                     ;; realizing more rows as per the maximum result size
-                    (.setMaxResults *page-size*))
+                    (.setMaxResults *page-size*)
+                    (.setLabels labels))
           ;; as long as we don't set certain additional QueryJobConfiguration options, our queries *should* always be
           ;; following the fast query path (i.e. RPC)
           ;; check out com.google.cloud.bigquery.QueryRequestInfo.isFastQuerySupported for full details
@@ -366,9 +367,10 @@
 
 (mu/defn ^:private execute-bigquery-on-db :- some?
   ^TableResult
-  [database :- [:map [:details :map]] sql parameters cancel-chan cancel-requested?]
+  [database :- [:map [:details :map]] labels sql parameters cancel-chan cancel-requested?]
   (execute-bigquery
    (database-details->client (:details database))
+   labels
    sql
    parameters
    cancel-chan
@@ -411,6 +413,7 @@
 (mu/defn ^:private ^:dynamic *process-native*
   [respond  :- fn?
    database :- [:map [:details :map]]
+   labels
    sql
    parameters
    cancel-chan]
@@ -422,6 +425,7 @@
                             (post-process-native respond
                                                  (execute-bigquery-on-db
                                                   database
+                                                  labels
                                                   sql
                                                   parameters
                                                   cancel-chan
@@ -441,6 +445,14 @@
     (qp.timezone/system-timezone-id)
     "UTC"))
 
+(defn- bigquery-labels
+  [database, {{:keys [executed-by dashboard-id card-id], :as _info} :info}]
+  (if (get-in database [:details :include-info-labels] false)
+    (merge {}
+       (when executed-by {"metabase_user_id" executed-by})
+       (when dashboard-id {"metabase_dashboard_id" dashboard-id})
+       (when card-id {"metabase_card_id" card-id})) {}))
+
 (defmethod driver/execute-reducible-query :bigquery-cloud-sdk
   [_driver {{sql :query, :keys [params]} :native, :as outer-query} _context respond]
   (let [database (lib.metadata/database (qp.store/metadata-provider))]
@@ -449,7 +461,7 @@
       (let [sql (if (get-in database [:details :include-user-id-and-hash] true)
                   (str "-- " (qp.util/query->remark :bigquery-cloud-sdk outer-query) "\n" sql)
                   sql)]
-        (*process-native* respond database sql params qp.pipeline/*canceled-chan*)))))
+        (*process-native* respond database (bigquery-labels database outer-query) sql params qp.pipeline/*canceled-chan*)))))
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                           Other Driver Method Impls                                            |

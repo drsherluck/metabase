@@ -36,6 +36,12 @@ driver:
       type: boolean
       visible-if:
         advanced-options: true
+    - name: include-info-labels
+      display-name: Include User ID, Card ID and Dashboard ID as labels in job queries
+      default: false
+      type: boolean
+      visible-if:
+        advanced-options: true
     - default-advanced-options
 init:
   - step: load-namespace
